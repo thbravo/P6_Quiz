@@ -17,7 +17,7 @@ exports.load = (req, res, next, tipId) => {
     .catch(error => next(error));
 };
 
-// MW that allows actions only if the user logged in is admin or is the author of the tip.
+// MW that allows actions only if the user logged in is admin or is the author of the quiz.
 exports.adminOrAuthorRequired = (req, res, next) => {
 
     const isAdmin  = !!req.session.user.isAdmin;
@@ -35,13 +35,11 @@ exports.adminOrAuthorRequired = (req, res, next) => {
 // POST /quizzes/:quizId/tips
 exports.create = (req, res, next) => {
  
-    const authorId = req.session.user && req.session.user.id || 0;
-
     const tip = models.tip.build(
         {
             text: req.body.text,
             quizId: req.quiz.id,
-            authorId
+            authorId: req.session.user && req.session.user.id || 0
         });
 
     tip.save()
@@ -79,6 +77,39 @@ exports.accept = (req, res, next) => {
     });
 };
 
+// GET /quizzes/:quizId/edit
+exports.edit = (req, res, next) => {
+
+    const {tip, quiz} = req;
+
+    res.render('tips/edit', {tip, quiz});
+};
+
+
+// PUT /quizzes/:quizId
+exports.update = (req, res, next) => {
+
+    const {quiz, tip, body} = req;
+
+    tip.text = body.text;
+    tip.accepted = false; 
+
+    tip.save({fields: ["text", "accepted"]})
+    .then(tip => {
+        req.flash('success', 'Tip edited successfully.');
+        res.redirect('/goback');
+    })
+    .catch(Sequelize.ValidationError, error => {
+        req.flash('error', 'There are errors in the form:');
+        error.errors.forEach(({message}) => req.flash('error', message));
+        res.render('tips/edit', {tip, quiz});
+    })
+    .catch(error => {
+        req.flash('error', 'Error editing the Tip: ' + error.message);
+        next(error);
+    });
+};
+
 
 // DELETE /quizzes/:quizId/tips/:tipId
 exports.destroy = (req, res, next) => {
@@ -89,38 +120,5 @@ exports.destroy = (req, res, next) => {
         res.redirect('/quizzes/' + req.params.quizId);
     })
     .catch(error => next(error));
-};
-
-// GET /tips/:tipId/edit
-exports.edit = (req, res, next) => {
-
-    const {tip,quiz} = req;
-
-    res.render('tips/edit', {tip,quiz}); //Por si acaso pasamos el quiz porque es posible que lo necesitemos para editar el tip
-};
-
-// PUT /tips/:tipId
-exports.update = (req, res, next) => {
-
-    const {quiz,tip, body} = req;
-
-    tip.text = body.text; //Porque en el nombre del formulario he puesto que sea text
-
-    tip.accepted = false;
-
-    tip.save({fields: ["text","accepted"]})
-    .then(tip => {
-        req.flash('success', 'Tip edited successfully.');
-        res.redirect('/goback');
-    })
-    .catch(Sequelize.ValidationError, error => {
-        req.flash('error', 'There are errors in the form:');
-        error.errors.forEach(({message}) => req.flash('error', message));
-        res.render('tip/edit', {tip,quiz});
-    })
-    .catch(error => {
-        req.flash('error', 'Error editing the Tip: ' + error.message);
-        next(error);
-    });
 };
 

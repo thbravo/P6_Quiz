@@ -45,7 +45,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(partials());
 app.use(flash());
 
+// Dynamic Helper:
+app.use(function(req, res, next) {
+
+    // To use req.session in the views
+    res.locals.session = req.session;
+
+    next();
+});
+
 app.use('/', index);
+app.use('/quizzes/random_play', index);
+app.use('/quizzes/random_result', index);
+app.use('/quizzes/random_nomore', index);
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
