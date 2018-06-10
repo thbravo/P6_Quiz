@@ -1,30 +1,99 @@
 const Sequelize = require("sequelize");
+const Op = Sequelize.Op;
 const {models} = require("../models");
+
+const paginate = require('../helpers/paginate').paginate;
 
 // Autoload the quiz with id equals to :quizId
 exports.load = (req, res, next, quizId) => {
 
-    models.quiz.findById(quizId)
-        .then(quiz => {
+    models.quiz.findById(quizId, {
+        include: [
+            {model: models.tip, include: [{model: models.user, as: 'author'}]},
+            {model: models.user, as: 'author'}
+        ]
+    })
+    .then(quiz => {
         if (quiz) {
             req.quiz = quiz;
             next();
         } else {
             throw new Error('There is no quiz with id=' + quizId);
-}
-})
-.catch(error => next(error));
+        }
+    })
+    .catch(error => next(error));
+};
+
+
+// MW that allows actions only if the user logged in is admin or is the author of the quiz.
+exports.adminOrAuthorRequired = (req, res, next) => {
+
+    const isAdmin  = !!req.session.user.isAdmin;
+    const isAuthor = req.quiz.authorId === req.session.user.id;
+
+    if (isAdmin || isAuthor) {
+        next();
+    } else {
+        console.log('Prohibited operation: The logged in user is not the author of the quiz, nor an administrator.');
+        res.send(403);
+    }
 };
 
 
 // GET /quizzes
 exports.index = (req, res, next) => {
 
-    models.quiz.findAll()
-        .then(quizzes => {
-        res.render('quizzes/index.ejs', {quizzes});
-})
-.catch(error => next(error));
+    let countOptions = {
+        where: {}
+    };
+
+    let title = "Questions";
+
+    // Search:
+    const search = req.query.search || '';
+    if (search) {
+        const search_like = "%" + search.replace(/ +/g,"%") + "%";
+
+        countOptions.where.question = { [Op.like]: search_like };
+    }
+
+    // If there exists "req.user", then only the quizzes of that user are shown
+    if (req.user) {
+        countOptions.where.authorId = req.user.id;
+        title = "Questions of " + req.user.username;
+    }
+
+    models.quiz.count(countOptions)
+    .then(count => {
+
+        // Pagination:
+
+        const items_per_page = 10;
+
+        // The page to show is given in the query
+        const pageno = parseInt(req.query.pageno) || 1;
+
+        // Create a String with the HTMl used to render the pagination buttons.
+        // This String is added to a local variable of res, which is used into the application layout file.
+        res.locals.paginate_control = paginate(count, items_per_page, pageno, req.url);
+
+        const findOptions = {
+            ...countOptions,
+            offset: items_per_page * (pageno - 1),
+            limit: items_per_page,
+            include: [{model: models.user, as: 'author'}]
+        };
+
+        return models.quiz.findAll(findOptions);
+    })
+    .then(quizzes => {
+        res.render('quizzes/index.ejs', {
+            quizzes, 
+            search,
+            title
+        });
+    })
+    .catch(error => next(error));
 };
 
 
@@ -41,7 +110,7 @@ exports.show = (req, res, next) => {
 exports.new = (req, res, next) => {
 
     const quiz = {
-        question: "",
+        question: "", 
         answer: ""
     };
 
@@ -53,26 +122,29 @@ exports.create = (req, res, next) => {
 
     const {question, answer} = req.body;
 
+    const authorId = req.session.user && req.session.user.id || 0;
+
     const quiz = models.quiz.build({
         question,
-        answer
+        answer,
+        authorId
     });
 
     // Saves only the fields question and answer into the DDBB
-    quiz.save({fields: ["question", "answer"]})
-        .then(quiz => {
+    quiz.save({fields: ["question", "answer", "authorId"]})
+    .then(quiz => {
         req.flash('success', 'Quiz created successfully.');
-    res.redirect('/quizzes/' + quiz.id);
-})
-.catch(Sequelize.ValidationError, error => {
+        res.redirect('/quizzes/' + quiz.id);
+    })
+    .catch(Sequelize.ValidationError, error => {
         req.flash('error', 'There are errors in the form:');
-    error.errors.forEach(({message}) => req.flash('error', message));
-    res.render('quizzes/new', {quiz});
-})
-.catch(error => {
+        error.errors.forEach(({message}) => req.flash('error', message));
+        res.render('quizzes/new', {quiz});
+    })
+    .catch(error => {
         req.flash('error', 'Error creating a new Quiz: ' + error.message);
-    next(error);
-});
+        next(error);
+    });
 };
 
 
@@ -94,19 +166,19 @@ exports.update = (req, res, next) => {
     quiz.answer = body.answer;
 
     quiz.save({fields: ["question", "answer"]})
-        .then(quiz => {
+    .then(quiz => {
         req.flash('success', 'Quiz edited successfully.');
-    res.redirect('/quizzes/' + quiz.id);
-})
-.catch(Sequelize.ValidationError, error => {
+        res.redirect('/quizzes/' + quiz.id);
+    })
+    .catch(Sequelize.ValidationError, error => {
         req.flash('error', 'There are errors in the form:');
-    error.errors.forEach(({message}) => req.flash('error', message));
-    res.render('quizzes/edit', {quiz});
-})
-.catch(error => {
+        error.errors.forEach(({message}) => req.flash('error', message));
+        res.render('quizzes/edit', {quiz});
+    })
+    .catch(error => {
         req.flash('error', 'Error editing the Quiz: ' + error.message);
-    next(error);
-});
+        next(error);
+    });
 };
 
 
@@ -114,14 +186,14 @@ exports.update = (req, res, next) => {
 exports.destroy = (req, res, next) => {
 
     req.quiz.destroy()
-        .then(() => {
+    .then(() => {
         req.flash('success', 'Quiz deleted successfully.');
-    res.redirect('/quizzes');
-})
-.catch(error => {
+        res.redirect('/goback');
+    })
+    .catch(error => {
         req.flash('error', 'Error deleting the Quiz: ' + error.message);
-    next(error);
-});
+        next(error);
+    });
 };
 
 
@@ -154,53 +226,70 @@ exports.check = (req, res, next) => {
     });
 };
 
-
 exports.randomplay = (req, res, next) => {
-    req.session.randomPlay = req.session.randomPlay || [];
-    const whereOpt = {'id':{[Sequelize.Op.notIn]: req.session.randomPlay}};
+    req.session.alreadyPlayed = req.session.alreadyPlayed || [];
+    
+    const score = req.session.alreadyPlayed.length;
 
-    models.quiz.count({where: whereOpt})
-        .then(count => {
-        if (!count) {
-        const score = req.session.randomPlay.length;
-        req.session.randomPlay = [];
-        res.render('quizzes/random_nomore', {
-            score: score
-        });
-    }
-    return models.quiz.findAll({
-        where: whereOpt,
-        offset: Math.floor(Math.random() * count),
-        limit: 1
+    const whereOpt = {id: {[Sequelize.Op.notIn] : req.session.alreadyPlayed}} ;
+
+    models.quiz.count({where:whereOpt})
+
+   .then(count => {
+       return models.quiz.findAll({
+            where: whereOpt,
+            offset: Math.floor(Math.random()*count),
+            limit:1
+         })
+
+       .then(quizzes => {
+            return quizzes[0];
+        })
+   })
+
+    .then(quiz => {
+        if(quiz === undefined) {
+            req.session.alreadyPlayed = [];
+            res.render('quizzes/random_nomore', {
+                score: score
+            });
+        } else {
+            res.render('quizzes/random_play', {
+                quiz: quiz,
+                score: score
+            });
+        }
     })
-})
-.then(quiz => {
-        res.render('quizzes/random_play', {
-        quiz: quiz[0],
-        score: req.session.randomPlay.length
-    });
-})
-.catch(error => {
-        next(error);
-});
+
+    .catch(error => next(error));
 
 };
+
+
 exports.randomcheck = (req, res, next) => {
+    try{
     const {quiz, query} = req;
-    const answer = query.answer || "";
-    const result = answer.toLowerCase().trim() === quiz.answer.toLowerCase().trim();
-    // const score = req.session.randomPlay.length+result;
-    const score = req.session.randomPlay.length;
+    req.session.alreadyPlayed = req.session.alreadyPlayed || [];
 
-    if(result) {
-        if(req.session.randomPlay.indexOf(req.quiz.id) === -1)
-            req.session.randomPlay = req.session.randomPlay.concat(quiz.id);
-    } else {
-        req.session.randomPlay = [];
+    const actual_answer = query.answer || "";
+    const right_answer = quiz.answer;
+
+    const result = actual_answer.toLowerCase().trim() === right_answer.toLowerCase().trim();
+
+    if (result){
+        if(req.session.alreadyPlayed.indexOf(req.quiz.id) === -1){ 
+            req.session.alreadyPlayed.push(req.quiz.id);
+        }
+    } 
+
+    const score = req.session.alreadyPlayed.length;
+
+    if(!result){
+        req.session.alreadyPlayed = [];
     }
-    res.render('quizzes/random_result', {
-        result,
-        answer,
-        score
-    });
-};
+
+    res.render('quizzes/random_result', {actual_answer, result, score});
+    } catch (error){
+        next(error);
+    }
+}
